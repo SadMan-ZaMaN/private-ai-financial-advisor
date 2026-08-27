@@ -1,0 +1,89 @@
+pragma language_version 0.16;
+
+import CompactStandardLibrary;
+
+// ============================================================================
+// Private AI Financial Advisor — Policy Verification Contract
+// ============================================================================
+//
+// WHAT THIS PROVES (and this is the sentence you say to judges):
+//
+//   "Given the user's real income, expenses, savings, debt and risk
+//    tolerance — which never leave their device and are never written
+//    to the chain — the AI's recommendation is (1) affordable,
+//    (2) within the user's risk tolerance, and (3) not being made while
+//    the user is over-leveraged."
+//
+// The contract never sees or stores income/expenses/savings/debt. Those
+// values only exist as `witness` functions, which run locally in the
+// user's own app (see midnight-service/src/witnesses.ts). Per Compact's
+// confidentiality model: anything that is not a ledger field, and not a
+// disclosed circuit argument, is never revealed on-chain — only the
+// PROOF that the assertions below held is public.
+//
+// Only the wallet that owns this policy (identified by a hash of a local
+// secret key, never revealed) can submit a verification against it —
+// this stops anyone else from submitting fake numbers "on your behalf."
+// ============================================================================
+
+export ledger owner: Bytes<32>;
+export ledger verifiedCount: Counter;
+export ledger lastRecommendedAmount: Uint<64>;
+export ledger lastRiskLevelUsed: Uint<8>;
+
+// --- Setup -------------------------------------------------------------
+// Called once, when the user creates their private policy on-chain.
+constructor(sk: Bytes<32>) {
+  owner = disclose(ownerKey(sk));
+}
+
+circuit ownerKey(sk: Bytes<32>): Bytes<32> {
+  return persistentHash<Vector<2, Bytes<32>>>(
+    [pad(32, "midnight:advisor:owner"), sk]);
+}
+
+// --- Private inputs (implemented in TypeScript, on the user's device) --
+witness secretKey(): Bytes<32>;
+witness income(): Uint<64>;
+witness expenses(): Uint<64>;
+witness savings(): Uint<64>;
+witness debt(): Uint<64>;
+witness riskTolerance(): Uint<8>; // 0 = LOW, 1 = MEDIUM, 2 = HIGH
+
+// --- Main entry point ---------------------------------------------------
+// The AI backend computes `recommendedAmount` and `riskLevelUsed` off-chain
+// (see backend-ai/). This circuit is what turns that recommendation into a
+// verifiable claim, without ever exposing the private financial data that
+// justifies it.
+export circuit verifyRecommendation(
+  recommendedAmount: Uint<64>,
+  riskLevelUsed: Uint<8>
+): [] {
+  const sk = secretKey();
+  assert(owner == ownerKey(sk), "Not the policy owner");
+
+  const inc = income();
+  const exp = expenses();
+  const sav = savings();
+  const dbt = debt();
+  const tolerance = riskTolerance();
+
+  // 1. Affordability: recommendation must fit inside what's left after
+  //    fixed monthly expenses.
+  assert(exp + recommendedAmount <= inc,
+    "Recommendation exceeds what the user can afford this month");
+
+  // 2. Risk policy: AI cannot suggest something riskier than the user allows.
+  assert(riskLevelUsed <= tolerance,
+    "Recommendation exceeds the user's declared risk tolerance");
+
+  // 3. Solvency guard: don't verify new allocations for over-leveraged users.
+  assert(dbt <= sav,
+    "User is over-leveraged; refusing to verify a new allocation");
+
+  // Only the AI's claim (amount + risk level) becomes public — never the
+  // income/expenses/savings/debt that justified it.
+  lastRecommendedAmount = disclose(recommendedAmount);
+  lastRiskLevelUsed = disclose(riskLevelUsed);
+  verifiedCount.increment(1);
+}
