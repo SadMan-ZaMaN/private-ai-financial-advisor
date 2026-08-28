@@ -119,6 +119,8 @@ the hackathon resources:
 - `docs.midnight.network/compact` (language reference) for anything the
   compiler flags.
 
+hackathons starts at 10pm  friday
+
 ## Roadmap (where you are)
 - ✅ Lesson 1-3: concepts, Compact basics
 - ✅ Lesson 4/5 shortcut: contract + AI backend above are real, working code
